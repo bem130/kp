@@ -3,6 +3,8 @@ use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
+use std::io::Write;
 
 /// AtCoder project management program
 ///
@@ -67,6 +69,23 @@ fn run_command_capture_via_powershell(command_str: &str, current_dir: &PathBuf) 
     }
 }
 
+fn run_binary_directly(binary_path: &str, input_contents: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut process = Command::new(binary_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    // Write the input_contents to the binary's stdin.
+    if let Some(ref mut stdin) = process.stdin {
+        stdin.write_all(input_contents.as_bytes())?;
+    }
+
+    let output = process.wait_with_output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    Ok(stdout)
+}
+
+
 fn main() {
     // Parse command-line arguments
     let args = Args::parse();
@@ -85,6 +104,10 @@ fn main() {
     // "new" mode: create a new project and run cargo build in each subdirectory
     if args.arg == "new" && args.action.is_none() {
         let cmd_str = format!("npx atcoder-cli new {} --template rust", project_dir);
+        if !run_command_via_powershell("cargo install cargo-expand", &base_dir) {
+            eprintln!("Error installing cargo-expand");
+            std::process::exit(1);
+        }
         if !run_command_via_powershell(&cmd_str, &base_dir) {
             eprintln!("Error executing new project command");
             std::process::exit(1);
@@ -103,11 +126,12 @@ fn main() {
                             let problem_letter = path.file_name().unwrap().to_str().unwrap();
                             // Construct the URL with the project directory and problem letter.
                             let url = format!("// https://atcoder.jp/contests/{}/tasks/{}_{}\n\n\n", project_dir, project_dir, problem_letter);
-                            // Read the current contents of main.rs.
+                            // Read the current contents of main.rs and remove BOM if present.
                             match fs::read_to_string(&main_rs_path) {
                                 Ok(original_content) => {
-                                    // Prepend the URL line to the original content.
-                                    let new_content = format!("{}{}", url, original_content);
+                                    let cleaned_content = original_content.trim_start_matches("\u{feff}");
+                                    // Prepend the URL line to the cleaned content.
+                                    let new_content = format!("{}{}", url, cleaned_content);
                                     // Write the new content back to main.rs.
                                     if let Err(e) = fs::write(&main_rs_path, new_content) {
                                         eprintln!("Failed to write to {:?}: {}", main_rs_path, e);
@@ -118,6 +142,10 @@ fn main() {
                                     eprintln!("Failed to read {:?}: {}", main_rs_path, e);
                                     std::process::exit(1);
                                 }
+                            }
+                            if !run_command_via_powershell("mkdir expand", &path) {
+                                eprintln!("Failed to make dir expand {:?}", &path);
+                                std::process::exit(1);
                             }
                         }
                         // Build the project in the subdirectory.
@@ -166,9 +194,9 @@ fn main() {
                 eprintln!("npx atcoder-cli submit failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
-        } else // Debug mode: compile, show input, and display output in a beautified format
-        if action == "debug" {
-            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo build --features=debug ; cargo build --release", &problem_dir) {
+        } else if action == "debug" {
+            // Debug mode: compile, show input, and display output in a beautified format
+            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs ; cargo expand --release | out-file -filepath expand/main.rs ; cargo build ; cargo build --release", &problem_dir) {
                 eprintln!("cargo build failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
@@ -180,49 +208,65 @@ fn main() {
 
             println!("{}==================== [input] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
             let input_contents = match fs::read_to_string(&sample_file_in_path) {
-                Ok(contents) => contents,
+                Ok(contents) => contents.trim_start_matches("\u{feff}").to_string(), // Remove BOM if present
                 Err(e) => {
                     eprintln!("Failed to read sample input file {:?}: {}", sample_file_in_path, e);
                     std::process::exit(1);
                 }
             };
             print!("{}", input_contents);
+            println!("{:?}", input_contents);
 
-            println!("{}==================== [debug output] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
-            // Run the debug command with debug binary and capture output
-            let debug_cmd_debug = format!("cat {} | ./target/debug/bin", sample_file_in_path.display());
-            if let Some(debug_output) = run_command_capture_via_powershell(&debug_cmd_debug, &problem_dir) {
+            println!("{}==================== [debug output] ===================={}", 
+            highlight::colors::greenbg(&mode), highlight::reset(&mode));
+        // Construct the debug binary path from problem_dir+"/target/debug/bin"
+        let debug_bin_path = problem_dir.join("target").join("debug").join("bin");
+        // Run the debug command with the debug binary directly using input_contents.
+        match run_binary_directly(
+            debug_bin_path.to_str().expect("Failed to convert debug binary path to string"), 
+            &input_contents
+        ) {
+            Ok(debug_output) => {
                 print!("{}", debug_output);
-            } else {
-                eprintln!("Debug run (debug binary) failed in directory {:?}", problem_dir);
+            },
+            Err(e) => {
+                eprintln!("Debug run (debug binary) failed in directory {:?}: {}", problem_dir, e);
                 std::process::exit(1);
             }
+        }
 
-            println!("{}==================== [output] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
-            // Run the debug command with release binary and capture output
-            let debug_cmd_release = format!("cat {} | ./target/release/bin", sample_file_in_path.display());
-            let release_output = match run_command_capture_via_powershell(&debug_cmd_release, &problem_dir) {
-                Some(output) => {
-                    print!("{}", output);
-                    output // Store the output for comparison later.
-                },
-                None => {
-                    eprintln!("Debug run (release binary) failed in directory {:?}", problem_dir);
-                    std::process::exit(1);
-                }
-            };
+        println!("{}==================== [output] ===================={}", 
+            highlight::colors::greenbg(&mode), highlight::reset(&mode));
+        // Construct the release binary path from problem_dir+"/target/release/bin"
+        let release_bin_path = problem_dir.join("target").join("release").join("bin");
+        // Run the debug command with the release binary directly using input_contents.
+        let release_output = match run_binary_directly(
+            release_bin_path.to_str().expect("Failed to convert release binary path to string"), 
+            &input_contents
+        ) {
+            Ok(output) => {
+                print!("{}", output);
+                output // Store the output for comparison later.
+            },
+            Err(e) => {
+                eprintln!("Debug run (release binary) failed in directory {:?}: {}", problem_dir, e);
+                std::process::exit(1);
+            }
+        };
 
             println!("{}==================== [expect] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
             let expected_output = match fs::read_to_string(&sample_file_out_path) {
                 Ok(contents) => {
-                    print!("{}", contents);
-                    contents
+                    let cleaned = contents.trim_start_matches("\u{feff}").to_string(); // Remove BOM if present
+                    print!("{}", cleaned);
+                    cleaned
                 },
                 Err(e) => {
                     eprintln!("Failed to read expected output file {:?}: {}", sample_file_out_path, e);
                     std::process::exit(1);
                 }
             };
+            println!("{:?}", expected_output);
 
             // Check if the release output matches the expected output and display a message.
             println!("{}==================== [comparison result] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
