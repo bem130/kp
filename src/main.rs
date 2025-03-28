@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::io::Write;
+use std::time::Instant;
 
 /// AtCoder project management program
 ///
@@ -42,29 +43,6 @@ fn run_command_via_powershell(command_str: &str, current_dir: &PathBuf) -> bool 
         Err(e) => {
             eprintln!("Failed to execute command: {}", e);
             false
-        }
-    }
-}
-
-/// Executes a command via PowerShell and captures its output as a String.
-fn run_command_capture_via_powershell(command_str: &str, current_dir: &PathBuf) -> Option<String> {
-    let output = Command::new("powershell")
-        .arg("-Command")
-        .arg(command_str)
-        .current_dir(current_dir)
-        .output();
-    match output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            Some(stdout)
-        },
-        Ok(output) => {
-            eprintln!("Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
-            None
-        },
-        Err(e) => {
-            eprintln!("Failed to execute command: {}", e);
-            None
         }
     }
 }
@@ -206,7 +184,7 @@ fn main() {
             let sample_file_in_path = problem_dir.join(format!("tests/sample-{}.in", sample_number));
             let sample_file_out_path = problem_dir.join(format!("tests/sample-{}.out", sample_number));
 
-            println!("{}==================== [input] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            println!("{}==================== [input] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
             let input_contents = match fs::read_to_string(&sample_file_in_path) {
                 Ok(contents) => contents.trim_start_matches("\u{feff}").to_string(), // Remove BOM if present
                 Err(e) => {
@@ -215,46 +193,49 @@ fn main() {
                 }
             };
             print!("{}", input_contents);
-            println!("{:?}", input_contents);
+            println!("{}{:?}{}", highlight::bgcolors::blue(&mode), input_contents, highlight::reset(&mode));
 
-            println!("{}==================== [debug output] ===================={}", 
-            highlight::colors::greenbg(&mode), highlight::reset(&mode));
-        // Construct the debug binary path from problem_dir+"/target/debug/bin"
-        let debug_bin_path = problem_dir.join("target").join("debug").join("bin");
-        // Run the debug command with the debug binary directly using input_contents.
-        match run_binary_directly(
-            debug_bin_path.to_str().expect("Failed to convert debug binary path to string"), 
-            &input_contents
-        ) {
-            Ok(debug_output) => {
-                print!("{}", debug_output);
-            },
-            Err(e) => {
-                eprintln!("Debug run (debug binary) failed in directory {:?}: {}", problem_dir, e);
-                std::process::exit(1);
+            println!("{}==================== [debug output] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
+            // Construct the debug binary path from problem_dir+"/target/debug/bin"
+            let debug_bin_path = problem_dir.join("target").join("debug").join("bin");
+            // Run the debug command with the debug binary directly using input_contents.
+            match run_binary_directly(
+                debug_bin_path.to_str().expect("Failed to convert debug binary path to string"),
+                &input_contents
+            ) {
+                Ok(debug_output) => {
+                    print!("{}", debug_output);
+                },
+                Err(e) => {
+                    eprintln!("Debug run (debug binary) failed in directory {:?}: {}", problem_dir, e);
+                    std::process::exit(1);
+                }
             }
-        }
 
-        println!("{}==================== [output] ===================={}", 
-            highlight::colors::greenbg(&mode), highlight::reset(&mode));
-        // Construct the release binary path from problem_dir+"/target/release/bin"
-        let release_bin_path = problem_dir.join("target").join("release").join("bin");
-        // Run the debug command with the release binary directly using input_contents.
-        let release_output = match run_binary_directly(
-            release_bin_path.to_str().expect("Failed to convert release binary path to string"), 
-            &input_contents
-        ) {
-            Ok(output) => {
-                print!("{}", output);
-                output // Store the output for comparison later.
-            },
-            Err(e) => {
-                eprintln!("Debug run (release binary) failed in directory {:?}: {}", problem_dir, e);
-                std::process::exit(1);
-            }
-        };
+            println!("{}==================== [output] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
+            // Construct the release binary path from problem_dir+"/target/release/bin"
+            let release_bin_path = problem_dir.join("target").join("release").join("bin");
 
-            println!("{}==================== [expect] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            // Measure execution time for the release binary run
+            let start = Instant::now();
+            let release_output = match run_binary_directly(
+                release_bin_path.to_str().expect("Failed to convert release binary path to string"),
+                &input_contents
+            ) {
+                Ok(output) => {
+                    print!("{}", output);
+                    println!("{}{:?}{}", highlight::bgcolors::blue(&mode), output, highlight::reset(&mode));
+                    output // Store the output for comparison later.
+                },
+                Err(e) => {
+                    eprintln!("Debug run (release binary) failed in directory {:?}: {}", problem_dir, e);
+                    std::process::exit(1);
+                }
+            };
+            let duration = start.elapsed();
+            println!("{}Execution Time: {:?}{}", highlight::bgcolors::orange(&mode) , duration, highlight::reset(&mode));
+
+            println!("{}==================== [expect] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
             let expected_output = match fs::read_to_string(&sample_file_out_path) {
                 Ok(contents) => {
                     let cleaned = contents.trim_start_matches("\u{feff}").to_string(); // Remove BOM if present
@@ -266,17 +247,17 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            println!("{:?}", expected_output);
+            println!("{}{:?}{}", highlight::bgcolors::blue(&mode), expected_output, highlight::reset(&mode));
 
             // Check if the release output matches the expected output and display a message.
-            println!("{}==================== [comparison result] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            println!("{}==================== [comparison result] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
             if release_output.trim() == expected_output.trim() {
-                println!("✅ Output matches expected output.");
+                println!("{}✅ Output matches expected output.{}", highlight::bgcolors::lightblue(&mode), highlight::reset(&mode));
             } else {
-                println!("❌ Output does not match expected output.");
+                println!("{}❌ Output does not match expected output.{}", highlight::bgcolors::red(&mode), highlight::reset(&mode));
             }
 
-            println!("{}==================== [complete] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            println!("{}==================== [complete] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
         } else {
             eprintln!("Unknown action: {}. Allowed actions are 'test', 'submit', or 'debug'.", action);
             std::process::exit(1);
@@ -385,20 +366,71 @@ pub mod highlight {
                 HighlightMode::None => "".to_string(),
             }
         }
-        pub fn greenbg(mode: &HighlightMode) -> String {
+    }
+    pub mod bgcolors {
+        use super::HighlightMode;
+        pub fn pink(mode: &HighlightMode) -> String {
             match mode {
-                HighlightMode::Color16 => "\x1b[42m".to_string(),
-                HighlightMode::Color256 => "\x1b[48;5;82m".to_string(),
-                HighlightMode::TrueColor => "\x1b[48;2;50;100;30m".to_string(),
-                HighlightMode::None => "".to_string(),
+                HighlightMode::Color16   => "\x1b[45m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;88m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;60;20;60m".to_string(),
+                HighlightMode::None      => "".to_string(),
             }
         }
-        pub fn redbg(mode: &HighlightMode) -> String {
+        pub fn blue(mode: &HighlightMode) -> String {
             match mode {
-                HighlightMode::Color16 => "\x1b[41m".to_string(),
-                HighlightMode::Color256 => "\x1b[48;5;196m".to_string(),
-                HighlightMode::TrueColor => "\x1b[48;2;250;80;50m".to_string(),
-                HighlightMode::None => "".to_string(),
+                HighlightMode::Color16   => "\x1b[44m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;18m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;20;40;80m".to_string(),
+                HighlightMode::None      => "".to_string(),
+            }
+        }
+        pub fn white(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16   => "\x1b[47m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;237m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;40;40;40m".to_string(),
+                HighlightMode::None      => "".to_string(),
+            }
+        }
+        pub fn yellow(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16   => "\x1b[43m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;100m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;60;60;20m".to_string(),
+                HighlightMode::None      => "".to_string(),
+            }
+        }
+        pub fn orange(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16   => "\x1b[43m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;95m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;70;40;10m".to_string(),
+                HighlightMode::None      => "".to_string(),
+            }
+        }
+        pub fn lightblue(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16   => "\x1b[104m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;20m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;20;30;60m".to_string(),
+                HighlightMode::None      => "".to_string(),
+            }
+        }
+        pub fn green(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16   => "\x1b[42m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;64m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;40;80;24m".to_string(),
+                HighlightMode::None      => "".to_string(),
+            }
+        }
+        pub fn red(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16   => "\x1b[41m".to_string(),
+                HighlightMode::Color256  => "\x1b[48;5;90m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;60;20;20m".to_string(),
+                HighlightMode::None      => "".to_string(),
             }
         }
     }
