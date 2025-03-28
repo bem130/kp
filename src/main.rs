@@ -92,9 +92,35 @@ fn main() {
         let project_path = base_dir.join(&project_dir);
         match fs::read_dir(&project_path) {
             Ok(entries) => {
+                // Iterate through each subdirectory in the project directory
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir() {
+                        // Insert the URL comment at the beginning of main.rs if it exists.
+                        let main_rs_path = path.join("main.rs");
+                        if main_rs_path.exists() {
+                            // Extract the problem letter from the deepest folder name.
+                            let problem_letter = path.file_name().unwrap().to_str().unwrap();
+                            // Construct the URL with the project directory and problem letter.
+                            let url = format!("// https://atcoder.jp/contests/{}/tasks/{}_{}\n\n\n", project_dir, project_dir, problem_letter);
+                            // Read the current contents of main.rs.
+                            match fs::read_to_string(&main_rs_path) {
+                                Ok(original_content) => {
+                                    // Prepend the URL line to the original content.
+                                    let new_content = format!("{}{}", url, original_content);
+                                    // Write the new content back to main.rs.
+                                    if let Err(e) = fs::write(&main_rs_path, new_content) {
+                                        eprintln!("Failed to write to {:?}: {}", main_rs_path, e);
+                                        std::process::exit(1);
+                                    }
+                                },
+                                Err(e) => {
+                                    eprintln!("Failed to read {:?}: {}", main_rs_path, e);
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                        // Build the project in the subdirectory.
                         println!("Running cargo build in directory {:?}", path);
                         if !run_command_via_powershell("cargo build", &path) {
                             eprintln!("cargo build failed in directory {:?}", path);
