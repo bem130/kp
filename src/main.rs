@@ -44,9 +44,33 @@ fn run_command_via_powershell(command_str: &str, current_dir: &PathBuf) -> bool 
     }
 }
 
+/// Executes a command via PowerShell and captures its output as a String.
+fn run_command_capture_via_powershell(command_str: &str, current_dir: &PathBuf) -> Option<String> {
+    let output = Command::new("powershell")
+        .arg("-Command")
+        .arg(command_str)
+        .current_dir(current_dir)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            Some(stdout)
+        },
+        Ok(output) => {
+            eprintln!("Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+            None
+        },
+        Err(e) => {
+            eprintln!("Failed to execute command: {}", e);
+            None
+        }
+    }
+}
+
 fn main() {
     // Parse command-line arguments
     let args = Args::parse();
+    let mode = highlight::HighlightMode::TrueColor;
 
     // Determine the base directory for command execution
     let base_dir = if let Some(root) = args.root_dir {
@@ -117,18 +141,52 @@ fn main() {
                 std::process::exit(1);
             }
         } else if action == "debug" {
-            // Debug mode: run cargo run with the debug feature, using sample input file
+            // Debug mode: compile, show input, and display output in a beautified format
             if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo build --features=debug", &problem_dir) {
                 eprintln!("cargo build failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
+
             // Use provided sample number or default to "1"
-            let sample_number = args.sample.unwrap_or("1".to_string());
-            let debug_cmd = format!("cat ./tests/sample-{}.in | ./target/debug/bin", sample_number);
-            if !run_command_via_powershell(&debug_cmd, &problem_dir) {
-                eprintln!("Debug run failed in directory {:?}", problem_dir);
-                std::process::exit(1);
+            let sample_number = args.sample.unwrap_or_else(|| "1".to_string());
+            let sample_file_in_path = problem_dir.join(format!("tests/sample-{}.in", sample_number));
+            let sample_file_out_path = problem_dir.join(format!("tests/sample-{}.out", sample_number));
+
+            println!("{}==================== [input] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
+            match fs::read_to_string(&sample_file_in_path) {
+                Ok(input_contents) => {
+                    print!("{}", input_contents);
+                },
+                Err(e) => {
+                    eprintln!("Failed to read sample input file {:?}: {}", sample_file_in_path, e);
+                    std::process::exit(1);
+                }
             }
+
+            println!("{}==================== [output] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
+            // Run the debug command and capture output
+            let debug_cmd = format!("cat {} | ./target/debug/bin", sample_file_in_path.display());
+            match run_command_capture_via_powershell(&debug_cmd, &problem_dir) {
+                Some(output_contents) => {
+                    print!("{}", output_contents);
+                },
+                None => {
+                    eprintln!("Debug run failed in directory {:?}", problem_dir);
+                    std::process::exit(1);
+                }
+            }
+
+            println!("{}==================== [expect] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
+            match fs::read_to_string(&sample_file_out_path) {
+                Ok(input_contents) => {
+                    print!("{}", input_contents);
+                },
+                Err(e) => {
+                    eprintln!("Failed to read sample input file {:?}: {}", sample_file_out_path, e);
+                    std::process::exit(1);
+                }
+            }
+            println!("{}==================== [complete] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
         } else {
             eprintln!("Unknown action: {}. Allowed actions are 'test', 'submit', or 'debug'.", action);
             std::process::exit(1);
@@ -136,5 +194,169 @@ fn main() {
     } else {
         eprintln!("Invalid arguments. For new project creation, use: kp.exe <contest_number> new. For problem commands, use: kp.exe <contest_number> <problem_letter> <action> [sample_number]");
         std::process::exit(1);
+    }
+}
+
+/// Highlighter module for syntax highlighting.
+pub mod highlight {
+    /// Highlight mode enum.
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    pub enum HighlightMode {
+        None,
+        Color16,
+        Color256,
+        TrueColor,
+    }
+
+    impl HighlightMode {
+        pub fn from_str(s: &str) -> HighlightMode {
+            match s {
+                "false" => HighlightMode::None,
+                "16" => HighlightMode::Color16,
+                "256" => HighlightMode::Color256,
+                "true" => HighlightMode::TrueColor,
+                _ => HighlightMode::None,
+            }
+        }
+    }
+
+    /// Returns the reset escape sequence.
+    pub fn reset(mode: &HighlightMode) -> String {
+        match mode {
+            HighlightMode::None => "".to_string(),
+            _ => "\x1b[0m".to_string(),
+        }
+    }
+
+    /// Color functions.
+    pub mod colors {
+        use super::HighlightMode;
+        pub fn pink(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[35m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;207m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;250;105;200m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn blue(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[34m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;27m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;50;50;255m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn white(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[37m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;15m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;255;255;255m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn green(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[32m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;82m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;100;230;60m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn red(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[31m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;196m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;250;80;50m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn yellow(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[33m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;11m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;240;230;0m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn orange(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[33m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;208m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;255;165;0m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn lightblue(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[94m".to_string(),
+                HighlightMode::Color256 => "\x1b[38;5;153m".to_string(),
+                HighlightMode::TrueColor => "\x1b[38;2;53;255;255m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn greenbg(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[42m".to_string(),
+                HighlightMode::Color256 => "\x1b[48;5;82m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;50;100;30m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+        pub fn redbg(mode: &HighlightMode) -> String {
+            match mode {
+                HighlightMode::Color16 => "\x1b[41m".to_string(),
+                HighlightMode::Color256 => "\x1b[48;5;196m".to_string(),
+                HighlightMode::TrueColor => "\x1b[48;2;250;80;50m".to_string(),
+                HighlightMode::None => "".to_string(),
+            }
+        }
+    }
+
+    /// Returns an escape code for opening parentheses color based on depth.
+    pub fn paren_color(depth: usize, mode: &HighlightMode) -> String {
+        if *mode == HighlightMode::None {
+            return "".to_string();
+        }
+        match mode {
+            HighlightMode::Color16 => {
+                let palette = [91, 92, 93, 94, 95, 96];
+                let code = palette[depth % palette.len()];
+                format!("\x1b[{}m", code)
+            },
+            HighlightMode::Color256 => {
+                let palette = [196, 202, 208, 214, 220, 226];
+                let code = palette[depth % palette.len()];
+                format!("\x1b[38;5;{}m", code)
+            },
+            HighlightMode::TrueColor => {
+                let palette = [
+                    (164, 219, 211),
+                    (217, 201, 145),
+                    (145, 189, 217),
+                    (217, 187, 145),
+                    (132, 137, 140),
+                ];
+                let (r, g, b) = palette[depth % palette.len()];
+                format!("\x1b[38;2;{};{};{}m", r, g, b)
+            },
+            HighlightMode::None => "".to_string(),
+        }
+    }
+
+    /// Colorize a plain string with the given color (by name) for foreground.
+    pub fn colorize_plain(text: &str, color: &str, mode: &HighlightMode) -> String {
+        if *mode == HighlightMode::None {
+            return text.to_string();
+        }
+        let color_code = match color {
+            "pink" => colors::pink(mode),
+            "blue" => colors::blue(mode),
+            "white" => colors::white(mode),
+            "green" => colors::green(mode),
+            "red" => colors::red(mode),
+            _ => "".to_string(),
+        };
+        format!("{}{}{}", color_code, text, reset(mode))
     }
 }
