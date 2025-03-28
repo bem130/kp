@@ -1,10 +1,9 @@
 // Necessary crate and module imports
 use clap::Parser;
 use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
 use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 /// AtCoder project management program
@@ -30,24 +29,38 @@ struct Args {
     root_dir: Option<String>,
 }
 
-/// Executes a command via PowerShell in the specified directory
-fn run_command_via_powershell(command_str: &str, current_dir: &PathBuf) -> bool {
-    let status = Command::new("powershell")
-        .arg("-Command")
-        .arg(command_str)
-        .current_dir(current_dir)
-        .status();
-
+/// OSに応じたシェルコマンド実行関数
+fn run_command(command_str: &str, current_dir: &Path) -> Result<(), String> {
+    println!("cmd: '{}'　(dir: '{}')", command_str, current_dir.display());
+    let status = if cfg!(target_os = "windows") {
+        Command::new("powershell")
+            .arg("-Command")
+            .arg(command_str)
+            .current_dir(current_dir)
+            .status()
+    } else {
+        Command::new("bash")
+            .arg("-c")
+            .arg(command_str)
+            .current_dir(current_dir)
+            .status()
+    };
     match status {
-        Ok(status) => status.success(),
-        Err(e) => {
-            eprintln!("Failed to execute command: {}", e);
-            false
-        }
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!(
+            "command '{}' failed with Error Code {} .",
+            command_str, status
+        )),
+        Err(e) => Err(format!("failed to execute '{}' : {}", command_str, e)),
     }
 }
 
-fn run_binary_directly(binary_path: &str, input_contents: &str) -> Result<String, Box<dyn std::error::Error>> {
+/// バイナリを直接実行し、標準入力へ文字列を渡す関数
+fn run_binary_directly(
+    binary_path: &str,
+    input_contents: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    println!("run bin: {}", binary_path);
     let mut process = Command::new(binary_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -63,6 +76,25 @@ fn run_binary_directly(binary_path: &str, input_contents: &str) -> Result<String
     Ok(stdout)
 }
 
+/// 指定されたビルドモード(debug/release)の実行ファイルパスを取得
+fn get_executable_path(problem_dir: &Path, build_mode: &str) -> PathBuf {
+    let mut path = problem_dir.join("target").join(build_mode);
+    if cfg!(target_os = "windows") {
+        path.push("bin.exe");
+    } else {
+        path.push("bin");
+    }
+    path
+}
+
+/// OSに応じた cargo expand とビルドのコマンド文字列を返す
+fn get_expand_and_build_command() -> String {
+    if cfg!(target_os = "windows") {
+        "$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs -Encoding utf8 ; cargo expand --release | out-file -filepath expand/main.rs -Encoding utf8 ; cargo build ; cargo build --release".to_string()
+    } else {
+        "RUST_BACKTRACE=1 cargo expand > expand/debug.rs && RUST_BACKTRACE=1 cargo expand --release > expand/main.rs && cargo build && cargo build --release".to_string()
+    }
+}
 
 fn main() {
     // Parse command-line arguments
@@ -77,21 +109,27 @@ fn main() {
     };
 
     // Create the project directory name (e.g., "abc300")
-    let project_dir = format!("abc{}", args.contest);
+    let project_dir_name = format!("abc{}", args.contest);
+    let project_dir = base_dir.join(&project_dir_name);
 
     // "new" mode: create a new project and run cargo build in each subdirectory
     if args.arg == "new" && args.action.is_none() {
-        let cmd_str = format!("npx atcoder-cli new {} --template rust", project_dir);
-        // if !run_command_via_powershell("cargo install cargo-expand", &base_dir) {
-        //     eprintln!("Error installing cargo-expand");
-        //     std::process::exit(1);
-        // }
-        if !run_command_via_powershell(&cmd_str, &base_dir) {
-            eprintln!("Error executing new project command");
+        // 新規プロジェクト作成モード
+        if let Err(e) = run_command("cargo install cargo-expand", &base_dir) {
+            eprintln!("cargo-expand のインストールに失敗しました: {}", e);
             std::process::exit(1);
         }
-        let project_path = base_dir.join(&project_dir);
-        match fs::read_dir(&project_path) {
+        let new_project_cmd = format!("npx atcoder-cli new {} --template rust", project_dir_name);
+        if let Err(e) = run_command(&new_project_cmd, &base_dir) {
+            eprintln!(
+                "新規プロジェクト作成コマンド '{}' でエラー: {}",
+                new_project_cmd, e
+            );
+            std::process::exit(1);
+        }
+
+        // プロジェクトディレクトリ内の各サブディレクトリに対して処理
+        match fs::read_dir(&project_dir) {
             Ok(entries) => {
                 // Iterate through each subdirectory in the project directory
                 for entry in entries.flatten() {
@@ -103,163 +141,280 @@ fn main() {
                             // Extract the problem letter from the deepest folder name.
                             let problem_letter = path.file_name().unwrap().to_str().unwrap();
                             // Construct the URL with the project directory and problem letter.
-                            let url = format!("// https://atcoder.jp/contests/{}/tasks/{}_{}\n\n\n", project_dir, project_dir, problem_letter);
+                            let url_comment = format!(
+                                "// https://atcoder.jp/contests/{}/tasks/{}_{}\n\n\n",
+                                project_dir_name, project_dir_name, problem_letter
+                            );
                             // Read the current contents of main.rs and remove BOM if present.
                             match fs::read_to_string(&main_rs_path) {
                                 Ok(original_content) => {
-                                    let cleaned_content = original_content.trim_start_matches("\u{feff}");
-                                    // Prepend the URL line to the cleaned content.
-                                    let new_content = format!("{}{}", url, cleaned_content);
-                                    // Write the new content back to main.rs.
+                                    let cleaned_content =
+                                        original_content.trim_start_matches("\u{feff}");
+                                    let new_content = format!("{}{}", url_comment, cleaned_content);
                                     if let Err(e) = fs::write(&main_rs_path, new_content) {
-                                        eprintln!("Failed to write to {:?}: {}", main_rs_path, e);
+                                        eprintln!(
+                                            "Failed to write to main.rs({}) : {}",
+                                            main_rs_path.display(),
+                                            e
+                                        );
                                         std::process::exit(1);
                                     }
-                                },
+                                }
                                 Err(e) => {
-                                    eprintln!("Failed to read {:?}: {}", main_rs_path, e);
+                                    eprintln!(
+                                        "Failed to read main.rs({}) : {}",
+                                        main_rs_path.display(),
+                                        e
+                                    );
                                     std::process::exit(1);
                                 }
                             }
-                            if !run_command_via_powershell("mkdir expand", &path) {
-                                eprintln!("Failed to make dir expand {:?}", &path);
+                            // OSに応じた mkdir コマンド
+                            let mkdir_cmd = if cfg!(target_os = "windows") {
+                                "mkdir expand"
+                            } else {
+                                "mkdir -p expand"
+                            };
+                            if let Err(e) = run_command(mkdir_cmd, &path) {
+                                eprintln!("Failed to make dir expand  ({}): {}", path.display(), e);
                                 std::process::exit(1);
                             }
                         }
                         // Build the project in the subdirectory.
-                        println!("Running cargo build in directory {:?}", path);
-                        if !run_command_via_powershell("cargo build", &path) {
-                            eprintln!("cargo build failed in directory {:?}", path);
+                        println!("Running cargo build in directory '{}'", path.display());
+                        if let Err(e) = run_command("cargo build", &path) {
+                            eprintln!(
+                                "cargo build failed in directory ({}): {}",
+                                path.display(),
+                                e
+                            );
                             std::process::exit(1);
                         }
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Failed to read project directory: {}", e);
+                eprintln!(
+                    "Failed to read project directory ({}) : {}",
+                    project_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
         }
     } else if let Some(action) = args.action {
         // Problem command mode
         let problem_letter = args.arg;
-        let problem_dir = base_dir.join(&project_dir).join(&problem_letter);
+        let problem_dir = project_dir.join(&problem_letter);
 
         if action == "test" {
             // Test mode: build and run tests
-            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs -Encoding utf8 ; cargo expand --release | out-file -filepath expand/main.rs -Encoding utf8 ; cargo build ; cargo build --release", &problem_dir) {
-                eprintln!("cargo build failed in directory {:?}", problem_dir);
+            let expand_build_cmd = get_expand_and_build_command();
+            if let Err(e) = run_command(&expand_build_cmd, &problem_dir) {
+                eprintln!(
+                    "cargo expand/build failed in directory ({}): {}",
+                    problem_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
-            let oj_test_cmd = "oj test -c \"target/release/bin.exe\" -d ./tests";
-            if !run_command_via_powershell(oj_test_cmd, &problem_dir) {
-                eprintln!("oj test failed in directory {:?}", problem_dir);
+            let bin_path = if cfg!(target_os = "windows") {
+                "target/release/bin.exe"
+            } else {
+                "target/release/bin"
+            };
+            let oj_test_cmd = format!("oj test -c \"{}\" -d ./tests", bin_path);
+            if let Err(e) = run_command(&oj_test_cmd, &problem_dir) {
+                eprintln!(
+                    "oj test failed in directory ({}): {}",
+                    problem_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
         } else if action == "submit" {
             // Submit mode: first run tests, then submit if tests pass
-            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs -Encoding utf8 ; cargo expand --release | out-file -filepath expand/main.rs -Encoding utf8 ; cargo build ; cargo build --release", &problem_dir) {
-                eprintln!("cargo build failed in directory {:?}", problem_dir);
+            let expand_build_cmd = get_expand_and_build_command();
+            if let Err(e) = run_command(&expand_build_cmd, &problem_dir) {
+                eprintln!(
+                    "cargo expand/build failed in directory ({}): {}",
+                    problem_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
-            let oj_test_cmd = "oj test -c \"target/release/bin.exe\" -d ./tests";
-            if !run_command_via_powershell(oj_test_cmd, &problem_dir) {
-                eprintln!("Tests failed in directory {:?}. Submission aborted.", problem_dir);
+            let bin_path = if cfg!(target_os = "windows") {
+                "target/release/bin.exe"
+            } else {
+                "target/release/bin"
+            };
+            let oj_test_cmd = format!("oj test -c \"{}\" -d ./tests", bin_path);
+            if let Err(e) = run_command(&oj_test_cmd, &problem_dir) {
+                eprintln!(
+                    "Tests failed in directory ({}). Submission aborted. {}",
+                    problem_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
-            let cmd_str = "npx atcoder-cli submit";
-            if !run_command_via_powershell(cmd_str, &problem_dir) {
-                eprintln!("npx atcoder-cli submit failed in directory {:?}", problem_dir);
+            let submit_cmd = "npx atcoder-cli submit";
+            if let Err(e) = run_command(submit_cmd, &problem_dir) {
+                eprintln!(
+                    "npx atcoder-cli submit failed in directory ({}): {}",
+                    problem_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
         } else if action == "debug" {
             // Debug mode: compile, show input, and display output in a beautified format
-            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs -Encoding utf8 ; cargo expand --release | out-file -filepath expand/main.rs -Encoding utf8 ; cargo build ; cargo build --release", &problem_dir) {
-                eprintln!("cargo build failed in directory {:?}", problem_dir);
+            let expand_build_cmd = get_expand_and_build_command();
+            if let Err(e) = run_command(&expand_build_cmd, &problem_dir) {
+                eprintln!(
+                    "cargo expand/build failed in directory ({}): {}",
+                    problem_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
-
-            // Use provided sample number or default to "1"
             let sample_number = args.sample.unwrap_or_else(|| "1".to_string());
-            let sample_file_in_path = problem_dir.join(format!("tests/sample-{}.in", sample_number));
-            let sample_file_out_path = problem_dir.join(format!("tests/sample-{}.out", sample_number));
+            let sample_in_path = problem_dir.join(format!("tests/sample-{}.in", sample_number));
+            let sample_out_path = problem_dir.join(format!("tests/sample-{}.out", sample_number));
 
-            println!("{}==================== [input] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
-            let input_contents = match fs::read_to_string(&sample_file_in_path) {
-                Ok(contents) => contents.trim_start_matches("\u{feff}").to_string(), // Remove BOM if present
+            println!(
+                "{}==================== [input] ===================={}{}",
+                highlight::bgcolors::green(&mode),
+                highlight::reset(&mode),
+                ""
+            );
+            let input_contents = match fs::read_to_string(&sample_in_path) {
+                Ok(contents) => contents.trim_start_matches("\u{feff}").to_string(),
                 Err(e) => {
-                    eprintln!("Failed to read sample input file {:?}: {}", sample_file_in_path, e);
+                    eprintln!(
+                        "Failed to read sample input file '{}' : {}",
+                        sample_in_path.display(),
+                        e
+                    );
                     std::process::exit(1);
                 }
             };
-            print!("{}", input_contents);
-            println!("{}{:?}{}", highlight::bgcolors::blue(&mode), input_contents, highlight::reset(&mode));
+            println!("{}", input_contents);
 
-            println!("{}==================== [debug output] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
+            println!(
+                "{}==================== [debug output] ===================={}{}",
+                highlight::bgcolors::green(&mode),
+                highlight::reset(&mode),
+                ""
+            );
             // Construct the debug binary path from problem_dir+"/target/debug/bin"
-            let debug_bin_path = problem_dir.join("target").join("debug").join("bin");
+            let debug_bin_path = get_executable_path(&problem_dir, "debug");
             // Run the debug command with the debug binary directly using input_contents.
-            match run_binary_directly(
-                debug_bin_path.to_str().expect("Failed to convert debug binary path to string"),
-                &input_contents
+            let debug_output = match run_binary_directly(
+                debug_bin_path
+                    .to_str()
+                    .expect("Failed to convert debug binary path to string"),
+                &input_contents,
             ) {
-                Ok(debug_output) => {
-                    print!("{}", debug_output);
-                },
+                Ok(output) => output,
                 Err(e) => {
-                    eprintln!("Debug run (debug binary) failed in directory {:?}: {}", problem_dir, e);
+                    eprintln!(
+                        "Debug run (debug binary) failed in directory ({}): {}",
+                        problem_dir.display(),
+                        e
+                    );
                     std::process::exit(1);
                 }
-            }
+            };
+            println!("{}", debug_output);
 
-            println!("{}==================== [output] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
+            println!(
+                "{}==================== [output] ===================={}{}",
+                highlight::bgcolors::green(&mode),
+                highlight::reset(&mode),
+                ""
+            );
             // Construct the release binary path from problem_dir+"/target/release/bin"
-            let release_bin_path = problem_dir.join("target").join("release").join("bin");
-
+            let release_bin_path = get_executable_path(&problem_dir, "release");
             // Measure execution time for the release binary run
             let start = Instant::now();
             let release_output = match run_binary_directly(
-                release_bin_path.to_str().expect("Failed to convert release binary path to string"),
-                &input_contents
+                release_bin_path
+                    .to_str()
+                    .expect("Failed to convert release binary path to string"),
+                &input_contents,
             ) {
-                Ok(output) => {
-                    print!("{}", output);
-                    println!("{}{:?}{}", highlight::bgcolors::blue(&mode), output, highlight::reset(&mode));
-                    output // Store the output for comparison later.
-                },
+                Ok(output) => output,
                 Err(e) => {
-                    eprintln!("Debug run (release binary) failed in directory {:?}: {}", problem_dir, e);
+                    eprintln!(
+                        "Debug run (release binary) failed in directory ({}): {}",
+                        problem_dir.display(),
+                        e
+                    );
                     std::process::exit(1);
                 }
             };
             let duration = start.elapsed();
-            println!("{}Execution Time: {:?}{}", highlight::bgcolors::orange(&mode) , duration, highlight::reset(&mode));
+            println!("{}", release_output);
+            println!(
+                "{}Execution Time: {:?}{}",
+                highlight::bgcolors::orange(&mode),
+                duration,
+                highlight::reset(&mode)
+            );
 
-            println!("{}==================== [expect] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
-            let expected_output = match fs::read_to_string(&sample_file_out_path) {
+            println!(
+                "{}==================== [expect] ===================={}{}",
+                highlight::bgcolors::green(&mode),
+                highlight::reset(&mode),
+                ""
+            );
+            let expected_output = match fs::read_to_string(&sample_out_path) {
                 Ok(contents) => {
-                    let cleaned = contents.trim_start_matches("\u{feff}").to_string(); // Remove BOM if present
-                    print!("{}", cleaned);
+                    let cleaned = contents.trim_start_matches("\u{feff}").to_string();
+                    println!("{}", cleaned);
                     cleaned
-                },
+                }
                 Err(e) => {
-                    eprintln!("Failed to read expected output file {:?}: {}", sample_file_out_path, e);
+                    eprintln!(
+                        "Failed to read expected output file {:?}: {}",
+                        sample_out_path.display(),
+                        e
+                    );
                     std::process::exit(1);
                 }
             };
-            println!("{}{:?}{}", highlight::bgcolors::blue(&mode), expected_output, highlight::reset(&mode));
 
             // Check if the release output matches the expected output and display a message.
-            println!("{}==================== [comparison result] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
+            println!(
+                "{}==================== [comparison result] ===================={}{}",
+                highlight::bgcolors::green(&mode),
+                highlight::reset(&mode),
+                ""
+            );
             if release_output.trim() == expected_output.trim() {
-                println!("{}✅ Output matches expected output.{}", highlight::bgcolors::lightblue(&mode), highlight::reset(&mode));
+                println!(
+                    "{}✅ Output matches expected output.{}",
+                    highlight::bgcolors::lightblue(&mode),
+                    highlight::reset(&mode)
+                );
             } else {
-                println!("{}❌ Output does not match expected output.{}", highlight::bgcolors::red(&mode), highlight::reset(&mode));
+                println!(
+                    "{}❌ Output does not match expected output.{}",
+                    highlight::bgcolors::red(&mode),
+                    highlight::reset(&mode)
+                );
             }
-
-            println!("{}==================== [complete] ===================={}", highlight::bgcolors::green(&mode), highlight::reset(&mode));
+            println!(
+                "{}==================== [complete] ===================={}{}",
+                highlight::bgcolors::green(&mode),
+                highlight::reset(&mode),
+                ""
+            );
         } else {
-            eprintln!("Unknown action: {}. Allowed actions are 'test', 'submit', or 'debug'.", action);
+            eprintln!(
+                "Unknown action: {}. Allowed actions are 'test', 'submit', or 'debug'.",
+                action
+            );
             std::process::exit(1);
         }
     } else {
@@ -433,52 +588,5 @@ pub mod highlight {
                 HighlightMode::None      => "".to_string(),
             }
         }
-    }
-
-    /// Returns an escape code for opening parentheses color based on depth.
-    pub fn paren_color(depth: usize, mode: &HighlightMode) -> String {
-        if *mode == HighlightMode::None {
-            return "".to_string();
-        }
-        match mode {
-            HighlightMode::Color16 => {
-                let palette = [91, 92, 93, 94, 95, 96];
-                let code = palette[depth % palette.len()];
-                format!("\x1b[{}m", code)
-            },
-            HighlightMode::Color256 => {
-                let palette = [196, 202, 208, 214, 220, 226];
-                let code = palette[depth % palette.len()];
-                format!("\x1b[38;5;{}m", code)
-            },
-            HighlightMode::TrueColor => {
-                let palette = [
-                    (164, 219, 211),
-                    (217, 201, 145),
-                    (145, 189, 217),
-                    (217, 187, 145),
-                    (132, 137, 140),
-                ];
-                let (r, g, b) = palette[depth % palette.len()];
-                format!("\x1b[38;2;{};{};{}m", r, g, b)
-            },
-            HighlightMode::None => "".to_string(),
-        }
-    }
-
-    /// Colorize a plain string with the given color (by name) for foreground.
-    pub fn colorize_plain(text: &str, color: &str, mode: &HighlightMode) -> String {
-        if *mode == HighlightMode::None {
-            return text.to_string();
-        }
-        let color_code = match color {
-            "pink" => colors::pink(mode),
-            "blue" => colors::blue(mode),
-            "white" => colors::white(mode),
-            "green" => colors::green(mode),
-            "red" => colors::red(mode),
-            _ => "".to_string(),
-        };
-        format!("{}{}{}", color_code, text, reset(mode))
     }
 }
