@@ -166,9 +166,9 @@ fn main() {
                 eprintln!("npx atcoder-cli submit failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
-        } else if action == "debug" {
-            // Debug mode: compile, show input, and display output in a beautified format
-            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo build --features=debug", &problem_dir) {
+        } else // Debug mode: compile, show input, and display output in a beautified format
+        if action == "debug" {
+            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo build --features=debug ; cargo build --release", &problem_dir) {
                 eprintln!("cargo build failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
@@ -178,41 +178,61 @@ fn main() {
             let sample_file_in_path = problem_dir.join(format!("tests/sample-{}.in", sample_number));
             let sample_file_out_path = problem_dir.join(format!("tests/sample-{}.out", sample_number));
 
-            println!("{}==================== [input] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
-            match fs::read_to_string(&sample_file_in_path) {
-                Ok(input_contents) => {
-                    print!("{}", input_contents);
-                },
+            println!("{}==================== [input] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            let input_contents = match fs::read_to_string(&sample_file_in_path) {
+                Ok(contents) => contents,
                 Err(e) => {
                     eprintln!("Failed to read sample input file {:?}: {}", sample_file_in_path, e);
                     std::process::exit(1);
                 }
+            };
+            print!("{}", input_contents);
+
+            println!("{}==================== [debug output] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            // Run the debug command with debug binary and capture output
+            let debug_cmd_debug = format!("cat {} | ./target/debug/bin", sample_file_in_path.display());
+            if let Some(debug_output) = run_command_capture_via_powershell(&debug_cmd_debug, &problem_dir) {
+                print!("{}", debug_output);
+            } else {
+                eprintln!("Debug run (debug binary) failed in directory {:?}", problem_dir);
+                std::process::exit(1);
             }
 
-            println!("{}==================== [output] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
-            // Run the debug command and capture output
-            let debug_cmd = format!("cat {} | ./target/debug/bin", sample_file_in_path.display());
-            match run_command_capture_via_powershell(&debug_cmd, &problem_dir) {
-                Some(output_contents) => {
-                    print!("{}", output_contents);
+            println!("{}==================== [output] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            // Run the debug command with release binary and capture output
+            let debug_cmd_release = format!("cat {} | ./target/release/bin", sample_file_in_path.display());
+            let release_output = match run_command_capture_via_powershell(&debug_cmd_release, &problem_dir) {
+                Some(output) => {
+                    print!("{}", output);
+                    output // Store the output for comparison later.
                 },
                 None => {
-                    eprintln!("Debug run failed in directory {:?}", problem_dir);
+                    eprintln!("Debug run (release binary) failed in directory {:?}", problem_dir);
                     std::process::exit(1);
                 }
-            }
+            };
 
-            println!("{}==================== [expect] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
-            match fs::read_to_string(&sample_file_out_path) {
-                Ok(input_contents) => {
-                    print!("{}", input_contents);
+            println!("{}==================== [expect] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            let expected_output = match fs::read_to_string(&sample_file_out_path) {
+                Ok(contents) => {
+                    print!("{}", contents);
+                    contents
                 },
                 Err(e) => {
-                    eprintln!("Failed to read sample input file {:?}: {}", sample_file_out_path, e);
+                    eprintln!("Failed to read expected output file {:?}: {}", sample_file_out_path, e);
                     std::process::exit(1);
                 }
+            };
+
+            // Check if the release output matches the expected output and display a message.
+            println!("{}==================== [comparison result] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
+            if release_output.trim() == expected_output.trim() {
+                println!("✅ Output matches expected output.");
+            } else {
+                println!("❌ Output does not match expected output.");
             }
-            println!("{}==================== [complete] ===================={}",highlight::colors::greenbg(&mode),highlight::reset(&mode));
+
+            println!("{}==================== [complete] ===================={}", highlight::colors::greenbg(&mode), highlight::reset(&mode));
         } else {
             eprintln!("Unknown action: {}. Allowed actions are 'test', 'submit', or 'debug'.", action);
             std::process::exit(1);
