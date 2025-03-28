@@ -8,7 +8,8 @@ use std::process::Command;
 ///
 /// Usage examples:
 /// - kp.exe <contest_number> new
-/// - kp.exe <contest_number> <problem_letter> <action>    (action: "test" or "submit")
+/// - kp.exe <contest_number> <problem_letter> <action> [sample_number]
+///   (action: "test", "submit", or "debug"; sample_number is optional for "debug", default is 1)
 /// You can specify the execution directory with the --root_dir (-r) option.
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -17,8 +18,10 @@ struct Args {
     contest: String,
     /// "new" or a problem identifier (e.g., "a", "b")
     arg: String,
-    /// Action for problem commands: "test" or "submit" (optional; only used when arg is a problem identifier)
+    /// Action for problem commands: "test", "submit", or "debug" (optional; only used when arg is a problem identifier)
     action: Option<String>,
+    /// Optional sample number for the debug action (default: 1)
+    sample: Option<String>,
     /// Base directory to execute commands (optional)
     #[arg(short, long)]
     root_dir: Option<String>,
@@ -99,29 +102,39 @@ fn main() {
             }
         } else if action == "submit" {
             // Submit mode: first run tests, then submit if tests pass
-            // Execute cargo build
             if !run_command_via_powershell("cargo build", &problem_dir) {
                 eprintln!("cargo build failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
-            // Execute tests
             let oj_test_cmd = "oj test -c \"target/debug/bin.exe\" -d ./tests";
             if !run_command_via_powershell(oj_test_cmd, &problem_dir) {
                 eprintln!("Tests failed in directory {:?}. Submission aborted.", problem_dir);
                 std::process::exit(1);
             }
-            // If tests pass, execute the submission command
             let cmd_str = "npx atcoder-cli submit";
             if !run_command_via_powershell(cmd_str, &problem_dir) {
                 eprintln!("npx atcoder-cli submit failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
+        } else if action == "debug" {
+            // Debug mode: run cargo run with the debug feature, using sample input file
+            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo build --features=debug", &problem_dir) {
+                eprintln!("cargo build failed in directory {:?}", problem_dir);
+                std::process::exit(1);
+            }
+            // Use provided sample number or default to "1"
+            let sample_number = args.sample.unwrap_or("1".to_string());
+            let debug_cmd = format!("cat ./tests/sample-{}.in | ./target/debug/bin", sample_number);
+            if !run_command_via_powershell(&debug_cmd, &problem_dir) {
+                eprintln!("Debug run failed in directory {:?}", problem_dir);
+                std::process::exit(1);
+            }
         } else {
-            eprintln!("Unknown action: {}. Allowed actions are 'test' or 'submit'.", action);
+            eprintln!("Unknown action: {}. Allowed actions are 'test', 'submit', or 'debug'.", action);
             std::process::exit(1);
         }
     } else {
-        eprintln!("Invalid arguments. For new project creation, use: kp.exe <contest_number> new. For problem commands, use: kp.exe <contest_number> <problem_letter> <action>");
+        eprintln!("Invalid arguments. For new project creation, use: kp.exe <contest_number> new. For problem commands, use: kp.exe <contest_number> <problem_letter> <action> [sample_number]");
         std::process::exit(1);
     }
 }
