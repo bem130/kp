@@ -82,10 +82,10 @@ fn main() {
     // "new" mode: create a new project and run cargo build in each subdirectory
     if args.arg == "new" && args.action.is_none() {
         let cmd_str = format!("npx atcoder-cli new {} --template rust", project_dir);
-        if !run_command_via_powershell("cargo install cargo-expand", &base_dir) {
-            eprintln!("Error installing cargo-expand");
-            std::process::exit(1);
-        }
+        // if !run_command_via_powershell("cargo install cargo-expand", &base_dir) {
+        //     eprintln!("Error installing cargo-expand");
+        //     std::process::exit(1);
+        // }
         if !run_command_via_powershell(&cmd_str, &base_dir) {
             eprintln!("Error executing new project command");
             std::process::exit(1);
@@ -147,22 +147,22 @@ fn main() {
 
         if action == "test" {
             // Test mode: build and run tests
-            if !run_command_via_powershell("cargo build", &problem_dir) {
+            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs -Encoding utf8 ; cargo expand --release | out-file -filepath expand/main.rs -Encoding utf8 ; cargo build ; cargo build --release", &problem_dir) {
                 eprintln!("cargo build failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
-            let oj_test_cmd = "oj test -c \"target/debug/bin.exe\" -d ./tests";
+            let oj_test_cmd = "oj test -c \"target/release/bin.exe\" -d ./tests";
             if !run_command_via_powershell(oj_test_cmd, &problem_dir) {
                 eprintln!("oj test failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
         } else if action == "submit" {
             // Submit mode: first run tests, then submit if tests pass
-            if !run_command_via_powershell("cargo build", &problem_dir) {
+            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs -Encoding utf8 ; cargo expand --release | out-file -filepath expand/main.rs -Encoding utf8 ; cargo build ; cargo build --release", &problem_dir) {
                 eprintln!("cargo build failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
-            let oj_test_cmd = "oj test -c \"target/debug/bin.exe\" -d ./tests";
+            let oj_test_cmd = "oj test -c \"target/release/bin.exe\" -d ./tests";
             if !run_command_via_powershell(oj_test_cmd, &problem_dir) {
                 eprintln!("Tests failed in directory {:?}. Submission aborted.", problem_dir);
                 std::process::exit(1);
@@ -174,7 +174,7 @@ fn main() {
             }
         } else if action == "debug" {
             // Debug mode: compile, show input, and display output in a beautified format
-            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs ; cargo expand --release | out-file -filepath expand/main.rs ; cargo build ; cargo build --release", &problem_dir) {
+            if !run_command_via_powershell("$Env:RUST_BACKTRACE = 1 ; cargo expand | out-file -filepath expand/debug.rs -Encoding utf8 ; cargo expand --release | out-file -filepath expand/main.rs -Encoding utf8 ; cargo build ; cargo build --release", &problem_dir) {
                 eprintln!("cargo build failed in directory {:?}", problem_dir);
                 std::process::exit(1);
             }
