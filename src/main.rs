@@ -401,23 +401,17 @@ fn main() {
             );
             if release_output.trim() == expected_output.trim() {
                 println!(
-                    "{}✅ Output matches expected output.{}",
+                    "{}[✅ Complete] Output matches expected output.{}",
                     highlight::bgcolors::lightblue(&mode),
                     highlight::reset(&mode)
                 );
             } else {
                 println!(
-                    "{}❌ Output does not match expected output.{}",
+                    "{}[❌ Failed] Output does not match expected output.{}",
                     highlight::bgcolors::red(&mode),
                     highlight::reset(&mode)
                 );
             }
-            println!(
-                "{}==================== [complete] ===================={}{}",
-                highlight::bgcolors::green(&mode),
-                highlight::reset(&mode),
-                ""
-            );
         } else {
             eprintln!(
                 "Unknown action: {}. Allowed actions are 'test', 'submit', or 'debug'.",
