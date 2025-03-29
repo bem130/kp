@@ -190,6 +190,14 @@ fn main() {
                             );
                             std::process::exit(1);
                         }
+                        if let Err(e) = run_command("cargo build --release", &path) {
+                            eprintln!(
+                                "cargo build failed in directory ({}): {}",
+                                path.display(),
+                                e
+                            );
+                            std::process::exit(1);
+                        }
                     }
                 }
             }
