@@ -6,11 +6,13 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{exit, Command},
 };
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
 
 /// CLI definition
 #[derive(Parser)]
@@ -37,7 +39,23 @@ enum Cmd {
         problem: String,
     },
 }
+#[derive(Deserialize)]
+struct Input {
+    tasks: Vec<Task>,
+}
 
+#[derive(Deserialize)]
+struct Task {
+    /// e.g. "A", "B", …
+    label: String,
+    directory: Directory,
+}
+
+#[derive(Deserialize)]
+struct Directory {
+    /// e.g. "a.rs"
+    submit: String,
+}
 fn main() {
     if let Err(err) = run() {
         eprintln!("Error: {err}");
@@ -123,9 +141,7 @@ fn init_template() -> Result<()> {
     if current_template.trim() != "kp-rust" {
         // acc config default-template
         let set_template = Command::new("acc")
-            .arg("config")
-            .arg("default-template")
-            .arg("kp-rust")
+            .args(["config", "default-template", "kp-rust"])
             .status()
             .context("failed to run `acc config default-template kp-rust`")?;
         if !set_template.success() {
@@ -136,19 +152,15 @@ fn init_template() -> Result<()> {
         }
     }
     Command::new("acc")
-        .arg("config")
-        .arg("default-task-dirname-format")
-        .arg("./")
+        .args(["config", "default-task-dirname-format", "./"])
         .status()
         .context("failed to run `acc config default-task-dirname-format ./`")?;
-    
+
     Command::new("acc")
-        .arg("config")
-        .arg("default-task-choice")
-        .arg("all")
+        .args(["config", "default-task-choice", "all"])
         .status()
         .context("failed to run `acc config default-task-choice all`")?;
-    
+
     Ok(())
 }
 
@@ -161,45 +173,52 @@ fn create_contest(contest: &str) -> Result<()> {
     // Remove directories
     // Create the contest directory
     Command::new("acc")
-        .arg("new")
-        .arg(contest)
+        .args(["new", contest])
         .status()
         .context(format!("failed to run `acc new {}`", contest))?;
 
-    // Read contest.acc.json
-    let acc_json = root.join("contest.acc.json");
-    let acc_content =
-        fs::read_to_string(&acc_json).context(format!("failed to read {}", acc_json.display()))?;
-    // Parse Problem IDs
+    // -------- 0. get directory argument --------
+    let json_path = Path::new(contest).join("contest.acc.json");
 
-    println!("Read contest configuration: {}", acc_content);
-    Ok(())
-}
+    // -------- 1. read JSON --------
+    let file =
+        fs::File::open(&json_path).with_context(|| format!("cannot open {:?}", json_path))?;
+    let input: Input = serde_json::from_reader(file)?;
 
-/// Generate one problem sub-crate
-fn make_problem(root: &Path, contest: &str, p: char) -> Result<()> {
-    let dir = root.join(p.to_string());
-    let crate_name = format!("{contest}_{p}");
-    // cargo new --bin <dir> --name <crate_name>
-    cmd("cargo")
-        .args(["new", "--bin"])
-        .arg(&dir)
-        .args(["--name", &crate_name])
-        .status()?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("cargo new failed for {p}"))?;
+    // -------- 2. load Cargo.toml (project root) --------
+    let cargo_path = Path::new(contest).join("Cargo.toml");
+    let mut doc = fs::read_to_string(&cargo_path)?.parse::<DocumentMut>()?;
 
-    // overwrite src/main.rs with simple template
-    let main = dir.join("src").join("main.rs");
-    fs::write(
-        &main,
-        TEMPLATE.replace(
-            "{{TITLE}}",
-            &format!("{contest} {}", p.to_ascii_uppercase()),
-        ),
-    )?;
-    println!("  • problem {p}");
+    // ① Ensure [[bin]] is an ArrayOfTables, not a Value::Array
+    if doc.get("bin").is_none() {
+        doc["bin"] = Item::ArrayOfTables(ArrayOfTables::new());
+    }
+    let bins = doc["bin"]
+        .as_array_of_tables_mut() // ✅ correct accessor
+        .expect("`bin` must be an array-of-tables");
+
+    for task in input.tasks {
+        let name = task.label.to_lowercase();
+        let path = format!("{}", task.directory.submit);
+
+        // ② Each element is &Table, so we can inspect keys normally
+        if bins
+            .iter()
+            .any(|tbl: &Table| tbl.get("name").and_then(|v| v.as_str()) == Some(name.as_str()))
+        {
+            continue; // already present
+        }
+
+        // ③ Push a new table
+        let mut t = Table::new();
+        t["name"] = name.clone().into();
+        t["path"] = path.into();
+        t.set_implicit(true); // no '{}' braces
+        bins.push(t);
+    }
+
+    fs::write(&cargo_path, doc.to_string())?;
+
     Ok(())
 }
 
@@ -235,23 +254,3 @@ fn test_problem(contest: &str, problem: &str) -> Result<()> {
 fn cmd<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
     Command::new(program)
 }
-
-//
-// -------- file templates
-//
-
-const TEMPLATE: &str = r#"// {{TITLE}}
-// ------------------------------------------------------------
-// Write your solution here.
-// ------------------------------------------------------------
-use std::io::{self, Read};
-
-fn main() {
-    // Fast input
-    let mut buf = String::new();
-    io::stdin().read_to_string(&mut buf).unwrap();
-
-    // TODO: implement
-    println!("0"); // placeholder
-}
-"#;
