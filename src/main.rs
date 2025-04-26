@@ -135,6 +135,20 @@ fn init_template() -> Result<()> {
             ));
         }
     }
+    Command::new("acc")
+        .arg("config")
+        .arg("default-task-dirname-format")
+        .arg("./")
+        .status()
+        .context("failed to run `acc config default-task-dirname-format ./`")?;
+    
+    Command::new("acc")
+        .arg("config")
+        .arg("default-task-choice")
+        .arg("all")
+        .status()
+        .context("failed to run `acc config default-task-choice all`")?;
+    
     Ok(())
 }
 
@@ -144,14 +158,21 @@ fn create_contest(contest: &str) -> Result<()> {
     if root.exists() {
         bail!("Directory {contest} already exists");
     }
-    fs::create_dir(root).with_context(|| format!("cannot create {contest}"))?;
-    println!("📁  created {contest}");
+    // Remove directories
+    // Create the contest directory
+    Command::new("acc")
+        .arg("new")
+        .arg(contest)
+        .status()
+        .context(format!("failed to run `acc new {}`", contest))?;
 
-    // Prepare problems a-f
-    for p in ['a', 'b', 'c', 'd', 'e', 'f'] {
-        make_problem(root, contest, p)?;
-    }
-    println!("✨  workspace ready – happy coding!");
+    // Read contest.acc.json
+    let acc_json = root.join("contest.acc.json");
+    let acc_content =
+        fs::read_to_string(&acc_json).context(format!("failed to read {}", acc_json.display()))?;
+    // Parse Problem IDs
+
+    println!("Read contest configuration: {}", acc_content);
     Ok(())
 }
 
