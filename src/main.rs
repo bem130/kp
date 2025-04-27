@@ -7,8 +7,10 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
+use serde_json::{json, Value};
 use std::{
-    fs,
+    fs::{self, File},
+    io::{BufReader, Write},
     path::{Path, PathBuf},
     process::{exit, Command},
 };
@@ -217,6 +219,57 @@ fn create_contest(contest: &str) -> Result<()> {
     }
 
     fs::write(&cargo_path, doc.to_string())?;
+
+    // .vscode/settings.jsonに追加
+
+    // Construct the path we want to add: "./<contest>/Cargo.toml".
+    let new_entry = format!("./{contest}/Cargo.toml");
+
+    // Path to VS Code settings.
+    let settings_path = Path::new(".vscode/settings.json");
+
+    // Ensure the .vscode directory exists.
+    if let Some(parent) = settings_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Open the file for reading if it exists; otherwise start with an empty JSON object.
+    let mut root: Value = if settings_path.exists() {
+        let file = File::open(settings_path)
+            .with_context(|| format!("Failed to open {}", settings_path.display()))?;
+        serde_json::from_reader(BufReader::new(file))
+            .with_context(|| format!("{} is not valid JSON", settings_path.display()))?
+    } else {
+        json!({})
+    };
+
+    // Navigate to rust-analyzer.linkedProjects, creating intermediate objects as needed.
+    let linked_projects = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("settings.json must be a JSON object"))?
+        .entry("rust-analyzer.linkedProjects")
+        .or_insert_with(|| Value::Array(Vec::new()));
+
+    // Ensure the field is an array.
+    let arr = linked_projects
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("rust-analyzer.linkedProjects must be an array"))?;
+
+    // Append if not already present.
+    if !arr.iter().any(|v| v == &Value::String(new_entry.clone())) {
+        arr.push(Value::String(new_entry));
+    } else {
+        println!("Entry already present; nothing to do.");
+        return Ok(());
+    }
+
+    // Write back atomically: serialize pretty-printed JSON then rename.
+    let tmp_path = settings_path.with_extension("json.tmp");
+    let mut tmp_file = File::create(&tmp_path)?;
+    tmp_file.write_all(serde_json::to_string_pretty(&root)?.as_bytes())?;
+    fs::rename(tmp_path, settings_path)?;
+
+    println!("Added new linked project successfully.");
 
     Ok(())
 }
