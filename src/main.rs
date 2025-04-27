@@ -4,7 +4,7 @@
 // * kp test <contest_id> <problem> : build & `oj test` a single task
 // ------------------------------------------------------------
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::{
@@ -14,7 +14,6 @@ use std::{
 };
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
 
-/// CLI definition
 #[derive(Parser)]
 #[command(author, version, about)]
 struct Cli {
@@ -224,33 +223,23 @@ fn create_contest(contest: &str) -> Result<()> {
 
 /// `kp test`
 fn test_problem(contest: &str, problem: &str) -> Result<()> {
-    let dir: PathBuf = [contest, problem].iter().collect();
+    let dir = Path::new(contest);
     if !dir.exists() {
         bail!("{} does not exist", dir.display());
     }
-
-    println!("🔧  cargo run --release");
-    cmd("cargo")
-        .current_dir(&dir)
-        .args(["run", "--release"])
-        .status()?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("cargo run failed"))?;
-
+    // oj test -c "cargo run --bin a -d "testcases/a"
     println!("🧪  oj test");
-    cmd("oj")
-        .current_dir(&dir)
-        .arg("test")
+    Command::new("oj")
+        .current_dir(Path::new(&dir))
+        .args([
+            "test",
+            "-c",
+            &format!("cargo run --bin {problem}"),
+            "-d",
+            &format!("testcases/{problem}"),
+        ])
         .status()?
         .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("oj test failed"))?;
-
+        .then_some(());
     Ok(())
-}
-
-/// Convenience wrapper to spawn a Command
-fn cmd<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
-    Command::new(program)
 }
