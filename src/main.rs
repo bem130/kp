@@ -75,11 +75,19 @@ fn run() -> Result<()> {
 //
 // -------- sub-command implementations
 //
-
+fn command(command_str: &str) -> Command {
+    if cfg!(target_os = "windows") {
+        let mut cmd = Command::new("powershell");
+        cmd.arg("-Command").arg(command_str);
+        cmd
+    } else {
+        Command::new(command_str)
+    }
+}
 /// `kp init`
 fn init_template() -> Result<()> {
     // 1. Obtain the path printed by `acc config-dir`
-    let output = Command::new("acc")
+    let output = command("acc")
         .arg("config-dir")
         .output()
         .context("failed to start `acc config-dir`")?;
@@ -90,8 +98,11 @@ fn init_template() -> Result<()> {
             output.status
         ));
     }
-    let config_dir =
-        String::from_utf8(output.stdout).context("`acc config-dir` produced non-UTF-8 output")?;
+    let config_dir = String::from_utf8(output.stdout)
+        .context("`acc config-dir` produced non-UTF-8 output")?
+        .trim()
+        .replace("\r\n", "")
+        .replace('\n', "");
     // Remove trailing new-line(s) and convert to PathBuf
     let config_dir = PathBuf::from(config_dir.trim());
 
@@ -100,7 +111,7 @@ fn init_template() -> Result<()> {
 
     if kp_path.exists() {
         // 3-a. Pull the latest changes
-        let status = Command::new("git")
+        let status = command("git")
             .arg("pull")
             .current_dir(&kp_path)
             .status()
@@ -111,7 +122,7 @@ fn init_template() -> Result<()> {
         }
     } else {
         // 3-b. Clone the repository
-        let status = Command::new("git")
+        let status = command("git")
             .arg("clone")
             .arg("https://github.com/wogikaze/kp-rust")
             .current_dir(&config_dir)
@@ -124,7 +135,7 @@ fn init_template() -> Result<()> {
     }
 
     // 4. Set Config the template
-    let default_template = Command::new("acc")
+    let default_template = command("acc")
         .arg("config")
         .arg("default-template")
         .output()
@@ -141,7 +152,7 @@ fn init_template() -> Result<()> {
         .context("`acc config default-template` produced non-UTF-8 output")?;
     if current_template.trim() != "kp-rust" {
         // acc config default-template
-        let set_template = Command::new("acc")
+        let set_template = command("acc")
             .args(["config", "default-template", "kp-rust"])
             .status()
             .context("failed to run `acc config default-template kp-rust`")?;
@@ -152,12 +163,12 @@ fn init_template() -> Result<()> {
             ));
         }
     }
-    Command::new("acc")
+    command("acc")
         .args(["config", "default-task-dirname-format", "./"])
         .status()
         .context("failed to run `acc config default-task-dirname-format ./`")?;
 
-    Command::new("acc")
+    command("acc")
         .args(["config", "default-task-choice", "all"])
         .status()
         .context("failed to run `acc config default-task-choice all`")?;
@@ -173,7 +184,7 @@ fn create_contest(contest: &str) -> Result<()> {
     }
     // Remove directories
     // Create the contest directory
-    Command::new("acc")
+    command("acc")
         .args(["new", contest])
         .status()
         .context(format!("failed to run `acc new {}`", contest))?;
@@ -282,17 +293,20 @@ fn test_problem(contest: &str, problem: &str) -> Result<()> {
     }
     // oj test -c "cargo run --bin a -d "testcases/a"
     println!("🧪  oj test");
-    Command::new("oj")
+    
+    let run_cmd = if cfg!(target_os = "windows") {
+        format!("\"cargo run --bin {problem}\"")
+    } else {
+        format!("cargo run --bin {problem}")
+    };
+
+    command("oj")
         .current_dir(Path::new(&dir))
-        .args([
-            "test",
-            "-c",
-            &format!("cargo run --bin {problem}"),
-            "-d",
-            &format!("testcases/{problem}"),
-        ])
+        .args(["test", "-c", &run_cmd])
+        .args(["-d", &format!("testcases/{problem}")])
         .status()?
         .success()
         .then_some(());
+
     Ok(())
 }
