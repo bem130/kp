@@ -305,9 +305,9 @@ fn test_problem(contest: &str, problem: &str) -> Result<()> {
     println!("🧪  oj test");
     
     let run_cmd = if cfg!(target_os = "windows") {
-        format!("\"cargo run --bin {problem}\"")
+        format!("\"cargo run --bin {problem} --release\"")
     } else {
-        format!("cargo run --bin {problem}")
+        format!("cargo run --bin {problem} --release")
     };
 
     command("oj")
