@@ -15,6 +15,8 @@ use std::{
     process::{exit, Command},
 };
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
+use toml_edit::Document;
+use std::ffi::OsStr;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -34,6 +36,13 @@ enum Cmd {
     },
     /// Build & `oj test` a problem
     Test {
+        /// Contest ID (e.g. abc300)
+        contest: String,
+        /// Problem ID letter (e.g. a)
+        problem: String,
+    },
+    /// Debug a problem (show input/output/expect/comparison)
+    Debug {
         /// Contest ID (e.g. abc300)
         contest: String,
         /// Problem ID letter (e.g. a)
@@ -69,6 +78,7 @@ fn run() -> Result<()> {
         Cmd::Init {} => init_template(),
         Cmd::New { contest } => create_contest(&contest),
         Cmd::Test { contest, problem } => test_problem(&contest, &problem),
+        Cmd::Debug { contest, problem } => debug_problem(&contest, &problem),
     }
 }
 
@@ -309,4 +319,97 @@ fn test_problem(contest: &str, problem: &str) -> Result<()> {
         .then_some(());
 
     Ok(())
+}
+
+/// `kp debug`
+fn debug_problem(contest: &str, problem: &str) -> Result<()> {
+    let dir = Path::new(contest);
+    if !dir.exists() {
+        bail!("{} does not exist", dir.display());
+    }
+    let testcase_dir = dir.join("testcases").join(problem);
+    if !testcase_dir.exists() {
+        bail!("{} does not exist", testcase_dir.display());
+    }
+    // sample-*.in をすべて列挙
+    let mut samples: Vec<_> = fs::read_dir(&testcase_dir)?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension() == Some(OsStr::new("in")) {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    samples.sort();
+    if samples.is_empty() {
+        bail!("No sample input files found in {}", testcase_dir.display());
+    }
+    for sample_in in samples {
+        let stem = sample_in.file_stem().unwrap().to_string_lossy();
+        // sample-1.in → sample-1.out
+        let sample_out = testcase_dir.join(format!("{}.out", stem));
+        println!("==================== [{}] ====================", stem);
+        // 入力ファイル読み込み
+        println!("[input]");
+        let input_contents = fs::read_to_string(&sample_in)
+            .map(|c| c.trim_start_matches('\u{feff}').to_string())
+            .map_err(|e| anyhow::anyhow!("Failed to read sample input file '{}': {}", sample_in.display(), e))?;
+        println!("{}", input_contents);
+
+        // debugビルド
+        println!("[debug output]");
+        let debug_output = run_cargo_bin(dir, problem, &input_contents, false)?;
+        println!("{}", debug_output);
+
+        // releaseビルド
+        println!("[output]");
+        let start = std::time::Instant::now();
+        let release_output = run_cargo_bin(dir, problem, &input_contents, true)?;
+        let duration = start.elapsed();
+        println!("{}", release_output);
+        println!("Execution Time: {:?}", duration);
+
+        // 期待値
+        println!("[expect]");
+        let expected_output = fs::read_to_string(&sample_out)
+            .map(|c| {
+                let cleaned = c.trim_start_matches('\u{feff}').to_string();
+                println!("{}", cleaned);
+                cleaned
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to read expected output file '{}': {}", sample_out.display(), e))?;
+
+        // 比較
+        println!("[comparison result]");
+        if release_output.trim() == expected_output.trim() {
+            println!("[✅ Complete] Output matches expected output.");
+        } else {
+            println!("[❌ Failed] Output does not match expected output.");
+        }
+        println!("");
+    }
+    Ok(())
+}
+
+fn run_cargo_bin(dir: &Path, problem: &str, input: &str, release: bool) -> Result<String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(dir)
+        .arg("run")
+        .arg("--bin").arg(problem);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+    let mut child = cmd.spawn().with_context(|| format!("Failed to spawn cargo run for bin {}", problem))?;
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        use std::io::Write;
+        stdin.write_all(input.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
