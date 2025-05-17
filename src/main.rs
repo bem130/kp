@@ -86,20 +86,20 @@ fn command(command_str: &str) -> Command {
 }
 /// `kp init`
 fn init_template() -> Result<()> {
-    // 1. Obtain the path printed by `acc config-dir`
-    let output = command("acc")
+    // 1. Obtain the path printed by `npx atcoder-cli config-dir`
+    let output = command("npx atcoder-cli")
         .arg("config-dir")
         .output()
-        .context("failed to start `acc config-dir`")?;
+        .context("failed to start `npx atcoder-cli config-dir`")?;
 
     if !output.status.success() {
         return Err(anyhow::anyhow!(
-            "`acc config-dir` exited with status {}",
+            "`npx atcoder-cli config-dir` exited with status {}",
             output.status
         ));
     }
     let config_dir = String::from_utf8(output.stdout)
-        .context("`acc config-dir` produced non-UTF-8 output")?
+        .context("`npx atcoder-cli config-dir` produced non-UTF-8 output")?
         .trim()
         .replace("\r\n", "")
         .replace('\n', "");
@@ -135,43 +135,43 @@ fn init_template() -> Result<()> {
     }
 
     // 4. Set Config the template
-    let default_template = command("acc")
+    let default_template = command("npx atcoder-cli")
         .arg("config")
         .arg("default-template")
         .output()
-        .context("failed to run `acc config default-template`")?;
+        .context("failed to run `npx atcoder-cli config default-template`")?;
 
     let status = default_template.status;
     if !status.success() {
         return Err(anyhow::anyhow!(
-            "`acc config default-template` failed with status {}",
+            "`npx atcoder-cli config default-template` failed with status {}",
             status
         ));
     }
     let current_template = String::from_utf8(default_template.stdout)
-        .context("`acc config default-template` produced non-UTF-8 output")?;
+        .context("`npx atcoder-cli config default-template` produced non-UTF-8 output")?;
     if current_template.trim() != "kp-rust" {
-        // acc config default-template
-        let set_template = command("acc")
+        // npx atcoder-cli config default-template kp-rust
+        let set_template = command("npx atcoder-cli")
             .args(["config", "default-template", "kp-rust"])
             .status()
-            .context("failed to run `acc config default-template kp-rust`")?;
+            .context("failed to run `npx atcoder-cli config default-template kp-rust`")?;
         if !set_template.success() {
             return Err(anyhow::anyhow!(
-                "`acc config default-template kp-rust` failed with status {}",
+                "`npx atcoder-cli config default-template kp-rust` failed with status {}",
                 set_template
             ));
         }
     }
-    command("acc")
+    command("npx atcoder-cli")
         .args(["config", "default-task-dirname-format", "./"])
         .status()
-        .context("failed to run `acc config default-task-dirname-format ./`")?;
+        .context("failed to run `npx atcoder-cli config default-task-dirname-format ./`")?;
 
-    command("acc")
+    command("npx atcoder-cli")
         .args(["config", "default-task-choice", "all"])
         .status()
-        .context("failed to run `acc config default-task-choice all`")?;
+        .context("failed to run `npx atcoder-cli config default-task-choice all`")?;
 
     Ok(())
 }
@@ -184,10 +184,10 @@ fn create_contest(contest: &str) -> Result<()> {
     }
     // Remove directories
     // Create the contest directory
-    command("acc")
+    command("npx atcoder-cli")
         .args(["new", contest])
         .status()
-        .context(format!("failed to run `acc new {}`", contest))?;
+        .context(format!("failed to run `npx atcoder-cli new {}`", contest))?;
 
     // -------- 0. get directory argument --------
     let json_path = Path::new(contest).join("contest.acc.json");
